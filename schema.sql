@@ -37,6 +37,15 @@ CREATE TABLE IF NOT EXISTS messages (id uuid PRIMARY KEY, sender_id uuid REFEREN
 CREATE TABLE IF NOT EXISTS trades (id uuid PRIMARY KEY, user_id uuid REFERENCES users(id) ON DELETE SET NULL, product_id uuid REFERENCES products(id) ON DELETE SET NULL, message text DEFAULT '', status text NOT NULL DEFAULT 'pending', created_at timestamptz NOT NULL DEFAULT now());
 CREATE TABLE IF NOT EXISTS push_subscriptions (id uuid PRIMARY KEY, user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE, subscription jsonb NOT NULL, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(), UNIQUE(user_id));
 CREATE TABLE IF NOT EXISTS app_settings (key text PRIMARY KEY, value jsonb NOT NULL DEFAULT '{}', updated_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS streaming_orders (
+ id uuid PRIMARY KEY, user_id uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT, service text NOT NULL CHECK(service IN ('netflix','disney')),
+ plan_id text DEFAULT '', plan_name text DEFAULT '', price numeric(12,2) NOT NULL DEFAULT 0, currency text NOT NULL DEFAULT 'USD',
+ customer jsonb NOT NULL DEFAULT '{}', payment_status text NOT NULL DEFAULT 'pending' CHECK(payment_status IN ('pending','paid','rejected','cancelled')),
+ status text NOT NULL DEFAULT 'Nouvelle demande', created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
+ verified_at timestamptz, verified_by uuid REFERENCES users(id)
+);
+CREATE INDEX IF NOT EXISTS streaming_orders_user_created_idx ON streaming_orders(user_id,created_at DESC);
+CREATE INDEX IF NOT EXISTS streaming_orders_status_created_idx ON streaming_orders(payment_status,created_at DESC);
 CREATE INDEX IF NOT EXISTS products_active_created_idx ON products(active,created_at DESC);
 CREATE INDEX IF NOT EXISTS orders_customer_created_idx ON orders(customer_id,created_at DESC);
 CREATE INDEX IF NOT EXISTS payments_status_created_idx ON payments(status,created_at DESC);

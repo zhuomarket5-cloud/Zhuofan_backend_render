@@ -118,6 +118,14 @@ app.get('/api/push/public-key',(req,res)=>res.json({publicKey:process.env.PUSH_P
 app.post('/api/push/subscribe',auth,async(req,res)=>{try{if(!req.body||!req.body.endpoint)return res.status(400).json({error:'Push subscription required'});await q('INSERT INTO push_subscriptions(id,user_id,subscription) VALUES($1,$2,$3) ON CONFLICT(user_id) DO UPDATE SET subscription=$3,updated_at=now()',[uid(),req.user.id,JSON.stringify(req.body)]);res.json({ok:true})}catch(e){sendError(res,e,400)}});
 app.delete('/api/push/subscribe',auth,async(req,res)=>{await q('DELETE FROM push_subscriptions WHERE user_id=$1',[req.user.id]);res.json({ok:true})});
 
+app.post('/api/streaming-orders',auth,async(req,res)=>{try{const service=String(req.body.service||'').toLowerCase();if(!['netflix','disney'].includes(service))return res.status(400).json({error:'service must be netflix or disney'});const price=Number(req.body.price)||0;const customer=req.body.customer&&typeof req.body.customer==='object'?req.body.customer:{};const r=await q('INSERT INTO streaming_orders(id,user_id,service,plan_id,plan_name,price,currency,customer,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *',[uid(),req.user.id,service,clean(req.body.planId),clean(req.body.planName||req.body.plan),price,clean(req.body.currency)||'USD',JSON.stringify(customer),clean(req.body.status)||'Nouvelle demande']);await q('INSERT INTO notifications(id,user_id,title,body) VALUES($1,$2,$3,$4)',[uid(),req.user.id,'Demande envoyée',`Ta demande ${service==='netflix'?'Netflix':'Disney+'} est en attente de vérification.`]).catch(()=>{});res.status(201).json({order:r.rows[0],streamingOrder:r.rows[0]})}catch(e){sendError(res,e,400)}});
+app.get('/api/streaming-orders',auth,async(req,res)=>{try{const r=await q('SELECT * FROM streaming_orders WHERE user_id=$1 ORDER BY created_at DESC',[req.user.id]);res.json({orders:r.rows,streamingOrders:r.rows})}catch(e){sendError(res,e)}});
+app.get('/api/admin/streaming-orders',admin,async(req,res)=>{try{const r=await q(`SELECT so.*,u.email customer_email,u.name customer_name FROM streaming_orders so JOIN users u ON u.id=so.user_id ORDER BY so.created_at DESC`);const orders=r.rows.map(o=>({...o,paymentStatus:o.payment_status,planName:o.plan_name,createdAt:o.created_at,price:Number(o.price),customer:{...(o.customer||{}),name:(o.customer||{}).name||o.customer_name,email:(o.customer||{}).email||o.customer_email}}));res.json({orders,streamingOrders:orders,data:orders})}catch(e){sendError(res,e)}});
+async function streamingApprove(req,res){const c=await pool.connect();try{await c.query('BEGIN');const r=await c.query("SELECT * FROM streaming_orders WHERE id=$1 FOR UPDATE",[req.params.id]);if(!r.rowCount)throw new Error('Streaming order not found');if(r.rows[0].payment_status!=='pending')throw new Error(`Already ${r.rows[0].payment_status}`);const up=await c.query("UPDATE streaming_orders SET payment_status='paid',status='Confirmée',verified_at=now(),verified_by=$2,updated_at=now() WHERE id=$1 RETURNING *",[req.params.id,req.user.id]);await c.query('INSERT INTO notifications(id,user_id,title,body) VALUES($1,$2,$3,$4)',[uid(),up.rows[0].user_id,'Abonnement confirmé',`Ton abonnement ${up.rows[0].service==='netflix'?'Netflix':'Disney+'} est confirmé.`]).catch(()=>{});await c.query('COMMIT');res.json({order:up.rows[0],status:'paid'})}catch(e){await c.query('ROLLBACK').catch(()=>{});sendError(res,e,400)}finally{c.release()}}
+app.post('/api/admin/streaming-orders/:id/approve',admin,streamingApprove);
+app.post('/api/admin/streaming-orders/:id/reject',admin,async(req,res)=>{try{const r=await q("UPDATE streaming_orders SET payment_status='rejected',status='Rejetée',verified_at=now(),verified_by=$2,updated_at=now() WHERE id=$1 AND payment_status='pending' RETURNING *",[req.params.id,req.user.id]);if(!r.rowCount)return res.status(400).json({error:'Streaming order not pending'});res.json({order:r.rows[0],status:'rejected'})}catch(e){sendError(res,e,400)}});
+app.patch('/api/admin/streaming-orders/:id',admin,async(req,res)=>{if(req.body.status==='paid'||req.body.action==='approve')return streamingApprove(req,res);if(req.body.status==='rejected'||req.body.action==='reject')return app._router.handle({...req,method:'POST',url:`/api/admin/streaming-orders/${req.params.id}/reject`,originalUrl:req.originalUrl},res,()=>{});return res.status(400).json({error:'Use approve or reject streaming order endpoint'})});
+
 app.get('/api/streaming-plans',async(req,res)=>{const r=await q("SELECT value FROM app_settings WHERE key='streaming_plans'");res.json(r.rowCount?r.rows[0].value:{netflix:[],disney:[]})});
 app.get('/api/admin/streaming-plans',admin,async(req,res)=>{const r=await q("SELECT value FROM app_settings WHERE key='streaming_plans'");res.json(r.rowCount?r.rows[0].value:{netflix:[],disney:[]})});
 app.put('/api/admin/streaming-plans',admin,async(req,res)=>{await q("INSERT INTO app_settings(key,value) VALUES('streaming_plans',$1) ON CONFLICT(key) DO UPDATE SET value=$1,updated_at=now()",[JSON.stringify(req.body)]);res.json({ok:true,data:req.body})});
@@ -130,8 +138,53 @@ app.post('/api/trades',auth,async(req,res)=>{try{const r=await q('INSERT INTO tr
 app.post('/api/payments/stripe/checkout-session',auth,(req,res)=>res.status(501).json({error:'Stripe is not enabled on this backend. Use manual payment or configure STRIPE_SECRET_KEY.'}));
 app.get('/api/payments/stripe/session/:id',auth,(req,res)=>res.status(501).json({error:'Stripe is not enabled on this backend.'}));
 app.get('/api/payments/stripe/session',auth,(req,res)=>res.status(501).json({error:'Stripe is not enabled on this backend.'}));
-app.post('/api/payments/paypal/create-order',auth,(req,res)=>res.status(501).json({error:'PayPal is not enabled on this backend. Configure PayPal credentials first.'}));
-app.post('/api/payments/paypal/capture-order',auth,(req,res)=>res.status(501).json({error:'PayPal is not enabled on this backend.'}));
+const PAYPAL_ENABLED=!!(process.env.PAYPAL_CLIENT_ID&&process.env.PAYPAL_CLIENT_SECRET);
+const PAYPAL_API=process.env.PAYPAL_MODE==='live'?'https://api-m.paypal.com':'https://api-m.sandbox.paypal.com';
+async function paypalToken(){const r=await fetch(`${PAYPAL_API}/v1/oauth2/token`,{method:'POST',headers:{'Authorization':'Basic '+Buffer.from(`${process.env.PAYPAL_CLIENT_ID}:${process.env.PAYPAL_CLIENT_SECRET}`).toString('base64'),'Content-Type':'application/x-www-form-urlencoded'},body:'grant_type=client_credentials'});const d=await r.json();if(!r.ok)throw new Error(d.error_description||'PayPal auth failed');return d.access_token;}
+app.post('/api/payments/paypal/create-order',auth,async(req,res)=>{
+ if(!PAYPAL_ENABLED)return res.status(501).json({error:'PayPal is not enabled on this backend. Configure PAYPAL_CLIENT_ID and PAYPAL_CLIENT_SECRET first.'});
+ const c=await pool.connect();
+ try{
+  const raw=normalizeItems(req.body.items);const {out,total,currency}=await priceCart(raw,c.query.bind(c));
+  await c.query('BEGIN');const oid=uid();
+  await c.query('INSERT INTO orders(id,customer_id,items,total,currency,payment_method) VALUES($1,$2,$3,$4,$5,$6)',[oid,req.user.id,JSON.stringify(out),total,currency,'paypal']);
+  await c.query('COMMIT');
+  const token=await paypalToken();
+  const pp=await fetch(`${PAYPAL_API}/v2/checkout/orders`,{method:'POST',headers:{'Authorization':`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify({intent:'CAPTURE',purchase_units:[{reference_id:oid,amount:{currency_code:currency,value:total.toFixed(2)}}],application_context:{return_url:req.body.returnUrl,cancel_url:req.body.cancelUrl}})});
+  const ppData=await pp.json();
+  if(!pp.ok)throw new Error(ppData.message||'PayPal order creation failed');
+  await q('UPDATE orders SET payment_method=$2 WHERE id=$1',[oid,'paypal:'+ppData.id]);
+  res.status(201).json({id:ppData.id,orderId:oid,internalOrderId:oid,links:ppData.links});
+ }catch(e){await c.query('ROLLBACK').catch(()=>{});sendError(res,e,400)}finally{c.release()}
+});
+async function paypalCapture(req,res){
+ if(!PAYPAL_ENABLED)return res.status(501).json({error:'PayPal is not enabled on this backend.'});
+ const paypalOrderId=req.body.paypalOrderId||req.body.orderID||req.body.token;
+ if(!paypalOrderId)return res.status(400).json({error:'paypalOrderId required'});
+ const c=await pool.connect();
+ try{
+  const token=await paypalToken();
+  const cap=await fetch(`${PAYPAL_API}/v2/checkout/orders/${paypalOrderId}/capture`,{method:'POST',headers:{'Authorization':`Bearer ${token}`,'Content-Type':'application/json'}});
+  const capData=await cap.json();
+  if(!cap.ok||capData.status!=='COMPLETED')throw new Error(capData.message||'PayPal capture not completed');
+  const internalOrderId=req.body.orderId||capData.purchase_units?.[0]?.reference_id;
+  if(!internalOrderId)throw new Error('Missing internal order reference');
+  await c.query('BEGIN');
+  const o=await c.query('SELECT * FROM orders WHERE id=$1 AND customer_id=$2 FOR UPDATE',[internalOrderId,req.user.id]);
+  if(!o.rowCount)throw new Error('Order not found');
+  const order=o.rows[0];
+  if(order.payment_status!=='paid'){
+   const items=Array.isArray(order.items)?order.items:[];
+   for(const item of items){const n=Number(item.quantity||1);const s=await c.query('UPDATE products SET stock=stock-$2,updated_at=now() WHERE id=$1 AND active=true AND stock >= $2 RETURNING id',[item.productId,n]);if(!s.rowCount)throw new Error(`Insufficient stock for product ${item.productId}`)}
+   await c.query("UPDATE orders SET payment_status='paid',status=CASE WHEN status='En attente' THEN 'Confirmée' ELSE status END,updated_at=now() WHERE id=$1",[internalOrderId]);
+   await c.query('INSERT INTO payments(id,order_id,customer_id,payment_method,amount,currency,transaction_reference,status,verified_at) VALUES($1,$2,$3,$4,$5,$6,$7,\'paid\',now())',[uid(),internalOrderId,req.user.id,'paypal',order.total,order.currency,paypalOrderId]);
+  }
+  await c.query('COMMIT');
+  res.json({status:'paid',orderId:internalOrderId,paypal:capData});
+ }catch(e){await c.query('ROLLBACK').catch(()=>{});sendError(res,e,400)}finally{c.release()}
+}
+app.post('/api/payments/paypal/capture-order',auth,paypalCapture);
+app.post('/api/payments/paypal/capture',auth,paypalCapture); // alias: matches the path this frontend build actually calls
 app.post('/api/chatbot',auth,async(req,res)=>res.json({reply:'Support automatique indisponible pour le moment. Vous pouvez contacter un administrateur.',needsAdmin:true,conversationId:null,severity:'normal'}));
 
 app.use((req,res)=>res.status(404).json({error:'Route not found',path:req.path,method:req.method}));
