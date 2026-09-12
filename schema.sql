@@ -15,8 +15,3 @@ CREATE TABLE IF NOT EXISTS notification_preferences(user_id uuid PRIMARY KEY REF
 CREATE TABLE IF NOT EXISTS app_settings(key text PRIMARY KEY,value jsonb NOT NULL DEFAULT '{}',updated_at timestamptz NOT NULL DEFAULT now());
 CREATE TABLE IF NOT EXISTS streaming_plans(id uuid PRIMARY KEY,service text NOT NULL CHECK(service IN ('netflix','disney')),name text NOT NULL,price numeric(12,2) NOT NULL,description text DEFAULT '',active boolean NOT NULL DEFAULT true,created_at timestamptz NOT NULL DEFAULT now(),updated_at timestamptz NOT NULL DEFAULT now());
 CREATE TABLE IF NOT EXISTS streaming_orders(id uuid PRIMARY KEY,customer_id uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT,service text NOT NULL,plan_id uuid REFERENCES streaming_plans(id) ON DELETE SET NULL,plan_name text DEFAULT '',price numeric(12,2) NOT NULL DEFAULT 0,currency text NOT NULL DEFAULT 'USD',payment_status text NOT NULL DEFAULT 'pending',status text NOT NULL DEFAULT 'Nouvelle demande',customer jsonb NOT NULL DEFAULT '{}',created_at timestamptz NOT NULL DEFAULT now(),updated_at timestamptz NOT NULL DEFAULT now());
-CREATE INDEX IF NOT EXISTS products_home_idx ON products(active,published,stock,created_at DESC);
-CREATE INDEX IF NOT EXISTS orders_customer_idx ON orders(customer_id,created_at DESC);
-CREATE INDEX IF NOT EXISTS payments_status_idx ON payments(status,created_at DESC);
-CREATE INDEX IF NOT EXISTS messages_receiver_idx ON messages(receiver_id,read,created_at DESC);
-CREATE INDEX IF NOT EXISTS messages_conversation_idx ON messages(conversation_id,created_at);
