@@ -98,7 +98,22 @@ app.post('/api/admin/messages/:id',admin,async(req,res)=>{try{const m=await q('S
 
 app.post('/api/uploads',auth,upload.any(),async(req,res)=>{try{const f=(req.files&&req.files[0])||req.file;if(!f)return res.status(400).json({error:'file required'});if(!f.mimetype.startsWith('image/'))return res.status(400).json({error:'Only image files are allowed'});const data=`data:${f.mimetype};base64,${f.buffer.toString('base64')}`;res.status(201).json({url:data,image:data})}catch(e){sendError(res,e,400)}});
 
-async function productCreate(req,res){try{const b=req.body;const p={id:uid(),name:clean(b.name||b.title)||'Produit',brand:clean(b.brand),category:clean(b.category)||'Téléphone',price:Number(b.price)||0,currency:clean(b.currency)||'USD',stock:Math.max(0,Number(b.stock)||0),image:clean(b.image||b.photo),description:clean(b.description),storage:clean(b.storage),seller_id:req.user.id};const r=await q('INSERT INTO products(id,name,brand,category,price,currency,stock,image,description,storage,seller_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *',[p.id,p.name,p.brand,p.category,p.price,p.currency,p.stock,p.image,p.description,p.storage,p.seller_id]);res.status(201).json({product:r.rows[0]})}catch(e){sendError(res,e,400)}}
+async function productCreate(req,res){try{const b=req.body;const p={id:uid(),name:clean(b.name||b.title||b.model)||'Produit',brand:clean(b.brand),category:clean(b.category)||'Téléphone',price:Number(b.price)||0,currency:clean(b.currency)||'USD',stock:Math.max(0,Number(b.stock)||0),image:clean(b.image||b.photo),description:clean(b.description),storage:clean(b.storage),seller_id:req.user.id};const r=await q('INSERT INTO products(id,name,brand,category,price,currency,stock,image,description,storage,seller_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *',[p.id,p.name,p.brand,p.category,p.price,p.currency,p.stock,p.image,p.description,p.storage,p.seller_id]);res.status(201).json({product:r.rows[0]})}catch(e){sendError(res,e,400)}}
+app.put('/api/products/:id',admin,async(req,res)=>{try{const b=req.body;const name=clean(b.name||b.title||b.model);const r=await q(`UPDATE products SET
+  name=COALESCE(NULLIF($2,''),name),
+  brand=COALESCE($3,brand),
+  category=COALESCE(NULLIF($4,''),category),
+  price=COALESCE($5,price),
+  stock=GREATEST(0,COALESCE($6,stock)),
+  image=COALESCE(NULLIF($7,''),image),
+  description=COALESCE($8,description),
+  storage=COALESCE($9,storage),
+  updated_at=now()
+ WHERE id=$1 RETURNING *`,[req.params.id,name||'',clean(b.brand),clean(b.category),b.price!=null?Number(b.price):null,b.stock!=null?Number(b.stock):null,clean(b.image||b.photo),b.description!=null?clean(b.description):null,b.storage!=null?clean(b.storage):null]);
+ if(!r.rowCount)return res.status(404).json({error:'Product not found'});
+ res.json({product:r.rows[0]})
+}catch(e){sendError(res,e,400)}});
+app.delete('/api/products/:id',admin,async(req,res)=>{try{const r=await q('UPDATE products SET active=false,updated_at=now() WHERE id=$1 RETURNING id',[req.params.id]);if(!r.rowCount)return res.status(404).json({error:'Product not found'});res.json({deleted:true,id:req.params.id})}catch(e){sendError(res,e,400)}});
 app.post('/api/admin/products',admin,productCreate);
 app.post('/api/products',admin,productCreate);
 app.patch('/api/admin/products/:id',admin,async(req,res)=>{try{const b=req.body,r=await q('UPDATE products SET name=COALESCE($2,name),brand=COALESCE($3,brand),category=COALESCE($4,category),price=COALESCE($5,price),currency=COALESCE($6,currency),stock=COALESCE($7,stock),image=COALESCE($8,image),description=COALESCE($9,description),storage=COALESCE($10,storage),active=COALESCE($11,active),updated_at=now() WHERE id=$1 RETURNING *',[req.params.id,b.name,b.brand,b.category,b.price,b.currency,b.stock,b.image,b.description,b.storage,b.active]);if(!r.rowCount)return res.status(404).json({error:'Product not found'});res.json({product:r.rows[0]})}catch(e){sendError(res,e,400)}});
